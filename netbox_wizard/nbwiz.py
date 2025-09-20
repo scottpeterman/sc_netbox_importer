@@ -8,11 +8,13 @@ from PyQt6.QtWidgets import (
     QComboBox, QLineEdit, QTextEdit, QTabWidget, QGroupBox,
     QProgressBar, QCheckBox, QFileDialog, QMessageBox,
     QSplitter, QTreeWidget, QTreeWidgetItem, QFormLayout,
-    QHeaderView
+    QHeaderView, QDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon, QColor
 import pynetbox
+from config_manager import ConfigManager, NetBoxConnection, AppPreferences, MasterPasswordDialog, \
+    MasterPasswordSetupDialog
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -483,12 +485,12 @@ class DeviceTableWidget(QTableWidget):
                 status_text = f"Found {len(device['matches'])} match(es)"
                 status_item = QTableWidgetItem(status_text)
                 status_item.setBackground(QColor(255, 255, 0))  # Yellow
-                status_item.setForeground(QColor(0,0,0))
+                status_item.setForeground(QColor(0, 0, 0))
 
             else:
                 status_item = QTableWidgetItem("New device")
                 status_item.setBackground(QColor(144, 238, 144))  # Light green
-                status_item.setForeground(QColor(0,0,0))
+                status_item.setForeground(QColor(0, 0, 0))
             self.setItem(row, 3, status_item)
 
             # Action ComboBox
@@ -527,14 +529,66 @@ class DeviceTableWidget(QTableWidget):
 
 
 class NetBoxImportWizard(QMainWindow):
-    """Main wizard window for NetBox device import"""
+    """Consolidated NetBox Import Wizard with Configuration Management"""
 
     def __init__(self):
         super().__init__()
+
+        # Initialize basic components first
         self.netbox_api = None
         self.discovery_model = DeviceDiscoveryModel()
         self.netbox_data = {}
+
+        # Initialize configuration
+        self.config = ConfigManager()
+
+        # Setup UI
         self.setup_ui()
+
+        # Initialize configuration system after UI is ready
+        self.initialize_config()
+
+    def initialize_config(self) -> bool:
+        """Initialize configuration system"""
+        try:
+            if not self.config.is_initialized():
+                # First time setup
+                dialog = MasterPasswordSetupDialog(self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    password = dialog.get_password()
+                    if not self.config.setup_master_password(password):
+                        QMessageBox.critical(self, "Error", "Failed to initialize credential storage")
+                        return False
+                else:
+                    return False
+            else:
+                # Unlock existing
+                dialog = MasterPasswordDialog(self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    password = dialog.get_password()
+                    if not self.config.unlock(password):
+                        QMessageBox.warning(self, "Warning",
+                                            "Incorrect password. Continuing without saved credentials.")
+                        return False
+                else:
+                    return False
+
+            # After successful unlock, populate UI with saved data
+            self.populate_connection_dropdown()
+
+            # Load window preferences
+            preferences = self.config.get_preferences()
+            self.resize(preferences.window_width, preferences.window_height)
+
+            # Load last used file path
+            if preferences.last_file_path:
+                self.file_path_input.setText(preferences.last_file_path)
+
+            return True
+        except Exception as e:
+            QMessageBox.warning(self, "Warning",
+                                f"Configuration error: {str(e)}\nContinuing without saved credentials.")
+            return False
 
     def setup_ui(self):
         self.setWindowTitle("SecureCartography - NetBox Import Wizard")
@@ -562,13 +616,19 @@ class NetBoxImportWizard(QMainWindow):
         self.statusBar().showMessage("Ready")
 
     def setup_connection_tab(self):
-        """Setup the connection and file loading tab"""
+        """Setup the connection and file loading tab with config integration"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
         # NetBox Connection Group
-        connection_group = QGroupBox("NetBox Connection")
-        connection_layout = QFormLayout(connection_group)
+        self.connection_group = QGroupBox("NetBox Connection")
+        connection_layout = QFormLayout(self.connection_group)
+
+        # Connection dropdown (will be populated after config init)
+        self.connection_combo = QComboBox()
+        self.connection_combo.addItem("-- New Connection --", None)
+        self.connection_combo.currentTextChanged.connect(self.on_connection_selected)
+        connection_layout.addRow("Saved Connections:", self.connection_combo)
 
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("https://netbox.example.com")
@@ -583,6 +643,15 @@ class NetBoxImportWizard(QMainWindow):
         self.verify_ssl_checkbox.setToolTip("Uncheck for self-signed certificates (common in lab environments)")
         connection_layout.addRow("SSL Verification:", self.verify_ssl_checkbox)
 
+        # Save connection controls
+        self.save_connection_checkbox = QCheckBox("Save this connection")
+        self.save_connection_checkbox.setChecked(True)
+        connection_layout.addRow("", self.save_connection_checkbox)
+
+        self.connection_name_input = QLineEdit()
+        self.connection_name_input.setPlaceholderText("Connection name...")
+        connection_layout.addRow("Connection Name:", self.connection_name_input)
+
         self.test_connection_btn = QPushButton("Test Connection")
         self.test_connection_btn.clicked.connect(self.test_netbox_connection)
         connection_layout.addRow(self.test_connection_btn)
@@ -592,7 +661,7 @@ class NetBoxImportWizard(QMainWindow):
         self.connection_progress.setVisible(False)
         connection_layout.addRow("Progress:", self.connection_progress)
 
-        layout.addWidget(connection_group)
+        layout.addWidget(self.connection_group)
 
         # File Loading Group
         file_group = QGroupBox("Topology File")
@@ -628,6 +697,79 @@ class NetBoxImportWizard(QMainWindow):
         layout.addStretch()
 
         self.tab_widget.addTab(tab, "1. Connection & File")
+
+    def populate_connection_dropdown(self):
+        """Populate the connection dropdown with saved connections"""
+        if not hasattr(self, 'connection_combo'):
+            return
+
+        self.connection_combo.clear()
+        self.connection_combo.addItem("-- New Connection --", None)
+
+        if self.config.credentials.is_unlocked():
+            for conn in self.config.list_connections():
+                self.connection_combo.addItem(conn.name, conn)
+
+    def on_connection_selected(self, connection_name: str):
+        """Handle connection selection from dropdown"""
+        if connection_name == "-- New Connection --":
+            self.clear_connection_fields()
+            return
+
+        # Find the selected connection
+        selected_conn = None
+        for i in range(self.connection_combo.count()):
+            if self.connection_combo.itemText(i) == connection_name:
+                selected_conn = self.connection_combo.itemData(i)
+                break
+
+        if selected_conn:
+            self.url_input.setText(selected_conn.url)
+            self.verify_ssl_checkbox.setChecked(selected_conn.verify_ssl)
+            if hasattr(self, 'connection_name_input'):
+                self.connection_name_input.setText(selected_conn.name)
+
+            # Load token
+            token = self.config.get_connection_token(selected_conn.name)
+            if token:
+                self.token_input.setText(token)
+
+    def clear_connection_fields(self):
+        """Clear connection input fields"""
+        if hasattr(self, 'url_input'):
+            self.url_input.clear()
+        if hasattr(self, 'token_input'):
+            self.token_input.clear()
+        if hasattr(self, 'verify_ssl_checkbox'):
+            self.verify_ssl_checkbox.setChecked(False)
+        if hasattr(self, 'connection_name_input'):
+            self.connection_name_input.clear()
+
+    def save_current_connection(self):
+        """Save the current connection if checkbox is checked"""
+        if not self.config.credentials.is_unlocked():
+            return
+
+        if not hasattr(self, 'save_connection_checkbox') or not self.save_connection_checkbox.isChecked():
+            return
+
+        name = ""
+        if hasattr(self, 'connection_name_input'):
+            name = self.connection_name_input.text().strip()
+
+        if not name:
+            name = f"NetBox-{len(self.config.list_connections()) + 1}"
+
+        url = self.url_input.text().strip()
+        token = self.token_input.text().strip()
+        verify_ssl = self.verify_ssl_checkbox.isChecked()
+
+        if url and token:
+            success = self.config.add_connection(name, url, token, verify_ssl)
+            if success:
+                self.config.update_connection_last_used(name)
+                self.populate_connection_dropdown()
+                self.statusBar().showMessage(f"Connection '{name}' saved successfully")
 
     def setup_discovery_tab(self):
         """Setup the device discovery and mapping tab"""
@@ -752,6 +894,9 @@ class NetBoxImportWizard(QMainWindow):
             token = self.token_input.text().strip()
             verify_ssl = self.verify_ssl_checkbox.isChecked()
             self.netbox_api = NetBoxAPI(url, token, verify_ssl)
+
+            # Save successful connection
+            self.save_current_connection()
         else:
             self.connection_status.setText(f"✗ {message}")
             self.connection_status.setStyleSheet("color: red")
@@ -759,11 +904,16 @@ class NetBoxImportWizard(QMainWindow):
 
     def browse_topology_file(self):
         """Browse for topology JSON file"""
+        preferences = self.config.get_preferences()
+        start_dir = str(preferences.last_file_path) if preferences.last_file_path else ""
+
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select SecureCartography JSON file", "", "JSON files (*.json)"
+            self, "Select SecureCartography JSON file", start_dir, "JSON files (*.json)"
         )
         if file_path:
             self.file_path_input.setText(file_path)
+            # Save the file path
+            self.config.update_preferences(last_file_path=file_path)
 
     def load_topology_file(self):
         """Load the topology file using threading"""
@@ -984,6 +1134,15 @@ class NetBoxImportWizard(QMainWindow):
             self.import_btn.setEnabled(True)
             self.cancel_import_btn.setEnabled(False)
             self.statusBar().showMessage("Import cancelled")
+
+    def closeEvent(self, event):
+        """Save preferences when closing"""
+        if self.config.credentials.is_unlocked():
+            self.config.update_preferences(
+                window_width=self.width(),
+                window_height=self.height()
+            )
+        event.accept()
 
 
 def main():
