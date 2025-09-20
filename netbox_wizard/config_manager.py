@@ -1,13 +1,25 @@
-# config_manager.py
+"""
+Configuration Manager for NetBox Import Wizard
+Handles secure credential storage and application preferences
+"""
 import json
 from pathlib import Path
 from typing import Dict, Optional, List
 from dataclasses import dataclass, asdict
+from datetime import datetime
 
-from PyQt6.QtWidgets import QMessageBox, QPushButton, QHBoxLayout, QLineEdit, QVBoxLayout, QLabel, QDialog, QCheckBox, \
-    QComboBox
+from PyQt6.QtWidgets import (
+    QMessageBox, QPushButton, QHBoxLayout, QLineEdit,
+    QVBoxLayout, QLabel, QDialog
+)
 
-from helpers.credslib import SecureCredentials
+# Import your credential manager - adjust path as needed
+try:
+    from helpers.credslib import SecureCredentials
+except ImportError:
+    # Fallback if credslib doesn't exist
+    print("Warning: credslib not found. Credential storage will be disabled.")
+    SecureCredentials = None
 
 
 @dataclass
@@ -35,21 +47,38 @@ class ConfigManager:
 
     def __init__(self, app_name: str = "NetBoxImportWizard"):
         self.app_name = app_name
-        self.credentials = SecureCredentials(app_name)
-        self.config_file = self.credentials.config_dir / "config.json"
+        self.credentials = SecureCredentials(app_name) if SecureCredentials else None
+
+        # Create config directory if it doesn't exist
+        if self.credentials:
+            self.config_file = self.credentials.config_dir / "config.json"
+        else:
+            # Fallback to local config
+            config_dir = Path.home() / f".{app_name.lower()}"
+            config_dir.mkdir(exist_ok=True)
+            self.config_file = config_dir / "config.json"
+
         self._connections: List[NetBoxConnection] = []
         self._preferences = AppPreferences()
 
     def is_initialized(self) -> bool:
         """Check if credential system is initialized"""
+        if not self.credentials:
+            return True  # No credentials system available
         return self.credentials.is_initialized
 
     def setup_master_password(self, password: str) -> bool:
         """Initialize the credential system with master password"""
+        if not self.credentials:
+            return True  # No credentials system available
         return self.credentials.setup_new_credentials(password)
 
     def unlock(self, password: str) -> bool:
         """Unlock the credential manager"""
+        if not self.credentials:
+            self._load_config()
+            return True  # No credentials system available
+
         success = self.credentials.unlock(password)
         if success:
             self._load_config()
@@ -78,8 +107,8 @@ class ConfigManager:
 
     def _save_config(self):
         """Save non-sensitive configuration to file"""
-        if not self.credentials.is_unlocked():
-            return
+        # Create directory if it doesn't exist
+        self.config_file.parent.mkdir(parents=True, exist_ok=True)
 
         data = {
             'connections': [asdict(conn) for conn in self._connections],
@@ -92,24 +121,13 @@ class ConfigManager:
         except Exception as e:
             print(f"Error saving config: {e}")
 
-    def add_connection(self, name: str, url: str, token: str, verify_ssl: bool = False) -> bool:
-        """Add a new NetBox connection"""
-        if not self.credentials.is_unlocked():
+    def _store_token(self, name: str, token: str) -> bool:
+        """Store token securely"""
+        if not self.credentials or not self.credentials.is_unlocked():
             return False
 
-        # Check if connection already exists
-        existing = self.get_connection(name)
-        if existing:
-            return self.update_connection(name, url, token, verify_ssl)
-
-        # Create new connection
-        connection = NetBoxConnection(name=name, url=url, verify_ssl=verify_ssl)
-        self._connections.append(connection)
-
-        # Store token securely
         try:
             token_key = f"netbox_token_{name}"
-            encrypted_token = self.credentials.encrypt_value(token)
 
             # Save to credentials file
             creds_file = self.credentials.config_dir / "credentials.yaml"
@@ -131,12 +149,29 @@ class ConfigManager:
                 })
 
             self.credentials.save_credentials(current_creds, creds_file)
-            self._save_config()
             return True
-
         except Exception as e:
             print(f"Error storing token: {e}")
             return False
+
+    def add_connection(self, name: str, url: str, token: str, verify_ssl: bool = False) -> bool:
+        """Add a new NetBox connection"""
+        # Check if connection already exists
+        existing = self.get_connection(name)
+        if existing:
+            return self.update_connection(name, url, token, verify_ssl)
+
+        # Create new connection
+        connection = NetBoxConnection(name=name, url=url, verify_ssl=verify_ssl)
+        self._connections.append(connection)
+
+        # Store token securely if credentials system available
+        success = self._store_token(name, token)
+        if not success:
+            print(f"Warning: Could not securely store token for {name}")
+
+        self._save_config()
+        return True
 
     def update_connection(self, name: str, url: str, token: str, verify_ssl: bool = False) -> bool:
         """Update an existing connection"""
@@ -148,23 +183,12 @@ class ConfigManager:
         connection.verify_ssl = verify_ssl
 
         # Update token
-        try:
-            creds_file = self.credentials.config_dir / "credentials.yaml"
-            current_creds = self.credentials.load_credentials(creds_file)
+        success = self._store_token(name, token)
+        if not success:
+            print(f"Warning: Could not securely store token for {name}")
 
-            token_key = f"netbox_token_{name}"
-            for cred in current_creds:
-                if cred.get('key') == token_key:
-                    cred['password'] = token
-                    break
-
-            self.credentials.save_credentials(current_creds, creds_file)
-            self._save_config()
-            return True
-
-        except Exception as e:
-            print(f"Error updating token: {e}")
-            return False
+        self._save_config()
+        return True
 
     def get_connection(self, name: str) -> Optional[NetBoxConnection]:
         """Get connection by name"""
@@ -173,9 +197,13 @@ class ConfigManager:
                 return conn
         return None
 
+    def list_connections(self) -> List[NetBoxConnection]:
+        """Get all configured connections"""
+        return self._connections.copy()
+
     def get_connection_token(self, name: str) -> Optional[str]:
         """Get API token for connection"""
-        if not self.credentials.is_unlocked():
+        if not self.credentials or not self.credentials.is_unlocked():
             return None
 
         try:
@@ -192,33 +220,43 @@ class ConfigManager:
 
         return None
 
-    def list_connections(self) -> List[NetBoxConnection]:
-        """Get all configured connections"""
-        return self._connections.copy()
-
     def delete_connection(self, name: str) -> bool:
         """Delete a connection and its token"""
-        if not self.credentials.is_unlocked():
-            return False
-
         # Remove from connections list
         self._connections = [conn for conn in self._connections if conn.name != name]
 
-        # Remove token from credentials
-        try:
-            creds_file = self.credentials.config_dir / "credentials.yaml"
-            current_creds = self.credentials.load_credentials(creds_file)
+        # Remove token from credentials if available
+        if self.credentials and self.credentials.is_unlocked():
+            try:
+                creds_file = self.credentials.config_dir / "credentials.yaml"
+                current_creds = self.credentials.load_credentials(creds_file)
 
-            token_key = f"netbox_token_{name}"
-            current_creds = [cred for cred in current_creds if cred.get('key') != token_key]
+                token_key = f"netbox_token_{name}"
+                current_creds = [cred for cred in current_creds if cred.get('key') != token_key]
 
-            self.credentials.save_credentials(current_creds, creds_file)
-            self._save_config()
+                self.credentials.save_credentials(current_creds, creds_file)
+            except Exception as e:
+                print(f"Error deleting token: {e}")
+
+        self._save_config()
+        return True
+
+    def is_credentials_unlocked(self) -> bool:
+        """Check if credentials system is unlocked"""
+        if not self.credentials:
+            return False
+        return self.credentials.is_unlocked()
+
+    def save_connection_if_enabled(self, name: str, url: str, token: str, verify_ssl: bool, save_enabled: bool) -> bool:
+        """Helper method to save connection only if save is enabled"""
+        if not save_enabled:
             return True
 
-        except Exception as e:
-            print(f"Error deleting token: {e}")
-            return False
+        if not name.strip():
+            # Generate default name
+            name = f"NetBox-{len(self.list_connections()) + 1}"
+
+        return self.add_connection(name, url, token, verify_ssl)
 
     def update_preferences(self, **kwargs):
         """Update user preferences"""
@@ -233,15 +271,12 @@ class ConfigManager:
 
     def update_connection_last_used(self, name: str):
         """Update the last used timestamp for a connection"""
-        from datetime import datetime
-
         connection = self.get_connection(name)
         if connection:
             connection.last_used = datetime.now().isoformat()
             self._save_config()
 
 
-# Dialog classes for password management (moved here to avoid circular imports)
 class MasterPasswordDialog(QDialog):
     """Dialog for entering master password"""
 
