@@ -1,0 +1,149 @@
+classDiagram
+    class NetBoxImportWizard {
+        -netbox_api: NetBoxAPI
+        -discovery_model: DeviceDiscoveryModel
+        -netbox_data: Dict
+        -config: ConfigManager
+        -tab_widget: QTabWidget
+        -device_table: DeviceTableWidget
+        +setup_ui()
+        +setup_connection_tab()
+        +setup_discovery_tab()
+        +setup_import_tab()
+        +initialize_config()
+        +test_netbox_connection()
+        +load_topology_file()
+        +start_import()
+        +validate_import()
+    }
+
+    class DeviceTableWidget {
+        -population_timer: QTimer
+        -devices_to_populate: List
+        -netbox_data_cache: Dict
+        -current_chunk_index: int
+        -chunk_size: int
+        +setup_table()
+        +populate_devices_with_netbox_data()
+        +get_selected_devices_for_import()
+        +select_all_devices()
+        +apply_defaults_to_selected()
+        -_populate_chunk()
+        -_populate_device_row()
+        -_find_matching_platform()
+        -_should_auto_select()
+    }
+
+    class NetBoxAPI {
+        -nb: pynetbox.api
+        -_cache: Dict
+        +get_manufacturers()
+        +get_device_types()
+        +get_device_roles()
+        +get_platforms()
+        +get_sites()
+        +get_existing_devices()
+        +create_device()
+        +create_cable()
+    }
+
+    class DeviceDiscoveryModel {
+        -discovered_devices: Dict
+        -device_mappings: Dict
+        -existing_devices: Dict
+        +set_discovered_devices()
+        +extract_unique_platforms()
+        +find_potential_matches()
+    }
+
+    class NetBoxConnectionThread {
+        -url: str
+        -token: str
+        -verify_ssl: bool
+        +run()
+        +connection_result: pyqtSignal
+    }
+
+    class TopologyLoadThread {
+        -file_path: str
+        +run()
+        +load_complete: pyqtSignal
+        +load_error: pyqtSignal
+        +progress_update: pyqtSignal
+        -_validate_topology_data()
+        -_safe_get_string()
+        -_safe_get_connections()
+    }
+
+    class NetBoxDataThread {
+        -netbox_api: NetBoxAPI
+        +run()
+        +data_ready: pyqtSignal
+        +data_error: pyqtSignal
+        +progress_update: pyqtSignal
+    }
+
+    class DeviceImportThread {
+        -netbox_api: NetBoxAPI
+        -import_data: List[Dict]
+        +run()
+        +import_progress: pyqtSignal
+        +import_complete: pyqtSignal
+        +device_created: pyqtSignal
+    }
+
+    class ConfigManager {
+        +credentials: CredentialManager
+        +is_initialized()
+        +setup_master_password()
+        +unlock()
+        +add_connection()
+        +list_connections()
+        +get_connection_token()
+        +get_preferences()
+        +update_preferences()
+    }
+
+    %% Inheritance relationships
+    NetBoxImportWizard --|> QMainWindow
+    DeviceTableWidget --|> QTableWidget
+    NetBoxConnectionThread --|> QThread
+    TopologyLoadThread --|> QThread
+    NetBoxDataThread --|> QThread
+    DeviceImportThread --|> QThread
+
+    %% Composition relationships
+    NetBoxImportWizard *-- DeviceTableWidget
+    NetBoxImportWizard *-- NetBoxAPI
+    NetBoxImportWizard *-- DeviceDiscoveryModel
+    NetBoxImportWizard *-- ConfigManager
+
+    %% Usage relationships
+    NetBoxImportWizard ..> NetBoxConnectionThread : creates
+    NetBoxImportWizard ..> TopologyLoadThread : creates
+    NetBoxImportWizard ..> NetBoxDataThread : creates
+    NetBoxImportWizard ..> DeviceImportThread : creates
+
+    NetBoxDataThread ..> NetBoxAPI : uses
+    DeviceImportThread ..> NetBoxAPI : uses
+
+    DeviceTableWidget ..> DeviceDiscoveryModel : uses data from
+
+    %% External dependencies (shown for context)
+    class QMainWindow {
+        <<PyQt6>>
+    }
+
+    class QTableWidget {
+        <<PyQt6>>
+    }
+
+    class QThread {
+        <<PyQt6>>
+    }
+
+    class pynetbox {
+        <<External Library>>
+    }
+
+    NetBoxAPI ..> pynetbox : uses
