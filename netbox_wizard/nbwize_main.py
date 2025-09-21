@@ -1,6 +1,6 @@
 """
 NetBox Import Wizard - Main Application
-Reduced main file using modularized components
+Complete version with export and reporting functionality
 """
 import sys
 import urllib3
@@ -26,6 +26,10 @@ from threading_classes import (
 from netbox_api import NetBoxAPI, DeviceDiscoveryModel
 from ui_components import DeviceTableWidget, get_table_selection_count
 
+# Import new export and reporting functionality
+from export_utils import export_device_table_to_csv, get_device_table_summary
+from import_report import ImportReportGenerator
+
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -41,6 +45,10 @@ class NetBoxImportWizard(QMainWindow):
         self.discovery_model = DeviceDiscoveryModel()
         self.netbox_data = {}
         self.devices_to_import = []
+
+        # Initialize export and reporting
+        self.report_generator = ImportReportGenerator()
+        self.import_results = []  # Store detailed import results
 
         # Initialize configuration
         self.config = ConfigManager()
@@ -258,6 +266,22 @@ class NetBoxImportWizard(QMainWindow):
         controls_layout.addStretch()
         layout.addLayout(controls_layout)
 
+        # Export controls
+        export_layout = QHBoxLayout()
+
+        self.export_btn = QPushButton("Export to CSV")
+        self.export_btn.clicked.connect(self.export_device_list)
+        self.export_btn.setEnabled(False)  # Disabled until devices loaded
+        export_layout.addWidget(self.export_btn)
+
+        self.export_summary_btn = QPushButton("Export Summary")
+        self.export_summary_btn.clicked.connect(self.show_export_summary)
+        self.export_summary_btn.setEnabled(False)
+        export_layout.addWidget(self.export_summary_btn)
+
+        export_layout.addStretch()
+        layout.addLayout(export_layout)
+
         self.tab_widget.addTab(tab, "2. Device Discovery")
 
     def setup_import_tab(self):
@@ -294,6 +318,22 @@ class NetBoxImportWizard(QMainWindow):
 
         controls_layout.addStretch()
         layout.addLayout(controls_layout)
+
+        # Report generation controls
+        report_layout = QHBoxLayout()
+
+        self.generate_csv_report_btn = QPushButton("Generate CSV Report")
+        self.generate_csv_report_btn.clicked.connect(self.generate_csv_report)
+        self.generate_csv_report_btn.setEnabled(False)
+        report_layout.addWidget(self.generate_csv_report_btn)
+
+        self.generate_excel_report_btn = QPushButton("Generate Excel Report")
+        self.generate_excel_report_btn.clicked.connect(self.generate_excel_report)
+        self.generate_excel_report_btn.setEnabled(False)
+        report_layout.addWidget(self.generate_excel_report_btn)
+
+        report_layout.addStretch()
+        layout.addLayout(report_layout)
 
         # Progress bar
         self.import_progress = QProgressBar()
@@ -556,6 +596,11 @@ class NetBoxImportWizard(QMainWindow):
         self.table_progress_label.setVisible(False)
         self.populate_bulk_controls()
         self.update_selection_count()
+
+        # Enable export functionality
+        self.export_btn.setEnabled(True)
+        self.export_summary_btn.setEnabled(True)
+
         self.statusBar().showMessage("NetBox data loaded successfully")
 
     # Device Management Methods
@@ -680,6 +725,51 @@ class NetBoxImportWizard(QMainWindow):
         else:
             self.on_netbox_data_ready(self.netbox_data)
 
+    # Export Methods
+    def export_device_list(self):
+        """Export the current device list to CSV"""
+        success = export_device_table_to_csv(self.device_table, self)
+        if success:
+            self.statusBar().showMessage("Device list exported successfully")
+
+    def show_export_summary(self):
+        """Show export summary dialog"""
+        summary = get_device_table_summary(self.device_table)
+
+        summary_text = f"""Device Discovery Summary:
+
+Total Devices: {summary['total']}
+Selected for Import: {summary['selected']}
+Fully Configured: {summary['configured']}
+New Devices: {summary['new']}
+Existing Devices: {summary['existing']}
+
+Ready for Import: {summary['selected'] if summary['configured'] == summary['selected'] else f"{summary['configured']} of {summary['selected']} selected"}
+"""
+
+        QMessageBox.information(self, "Export Summary", summary_text)
+
+    # Import Report Methods
+    def generate_csv_report(self):
+        """Generate CSV import report"""
+        if not self.import_results:
+            QMessageBox.information(self, "No Data", "No import results available. Please complete an import first.")
+            return
+
+        success = self.report_generator.generate_csv_report(self)
+        if success:
+            self.statusBar().showMessage("CSV report generated successfully")
+
+    def generate_excel_report(self):
+        """Generate Excel import report"""
+        if not self.import_results:
+            QMessageBox.information(self, "No Data", "No import results available. Please complete an import first.")
+            return
+
+        success = self.report_generator.generate_excel_report(self)
+        if success:
+            self.statusBar().showMessage("Excel report generated successfully")
+
     # Import Methods
     def validate_import(self):
         """Validate import configuration"""
@@ -729,7 +819,31 @@ class NetBoxImportWizard(QMainWindow):
         self.import_log.clear()
         self.import_log.append("Starting device import...\n")
 
-        self.import_thread = DeviceImportThread(self.netbox_api, self.devices_to_import)
+        # Get original device data with IP addresses for reporting
+        enhanced_import_data = []
+        for device in self.devices_to_import:
+            enhanced_device = device.copy()
+            # Find IP address from original discovery data
+            if device['name'] in self.discovery_model.discovered_devices:
+                node_details = self.discovery_model.discovered_devices[device['name']].get('node_details', {})
+                enhanced_device['ip_address'] = node_details.get('ip', '')
+            else:
+                # Check peers data
+                for device_name, device_data in self.discovery_model.discovered_devices.items():
+                    peers = device_data.get('peers', {})
+                    if device['name'] in peers:
+                        peer_data = peers[device['name']]
+                        enhanced_device['ip_address'] = peer_data.get('ip', '')
+                        break
+                else:
+                    enhanced_device['ip_address'] = ''
+            enhanced_import_data.append(enhanced_device)
+
+        # Set up report generator with current topology file
+        topology_file = self.file_path_input.text()
+        self.report_generator.set_import_data([], self.netbox_data, topology_file)
+
+        self.import_thread = DeviceImportThread(self.netbox_api, enhanced_import_data, self.netbox_data)
         self.import_thread.import_progress.connect(self.on_import_progress)
         self.import_thread.import_complete.connect(self.on_import_complete)
         self.import_thread.device_created.connect(self.on_device_created)
@@ -747,8 +861,8 @@ class NetBoxImportWizard(QMainWindow):
         log_entry = f'<span style="color: {color};">{status} {device_name}: {message}</span><br>'
         self.import_log.append(log_entry)
 
-    def on_import_complete(self, successful: int, failed: int):
-        """Handle import completion"""
+    def on_import_complete(self, successful: int, failed: int, detailed_results: list = None):
+        """Handle import completion with detailed results"""
         self.import_btn.setEnabled(True)
         self.cancel_import_btn.setEnabled(False)
 
@@ -759,6 +873,15 @@ class NetBoxImportWizard(QMainWindow):
 
         self.import_log.append(f'<br><b>{summary}</b>')
         self.statusBar().showMessage(summary)
+
+        # Store detailed results for reporting
+        if detailed_results:
+            self.import_results = detailed_results
+            self.report_generator.set_import_data(detailed_results, self.netbox_data, self.file_path_input.text())
+
+            # Enable report generation
+            self.generate_csv_report_btn.setEnabled(True)
+            self.generate_excel_report_btn.setEnabled(True)
 
         QMessageBox.information(self, "Import Complete", summary)
 

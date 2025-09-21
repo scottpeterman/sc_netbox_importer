@@ -205,10 +205,12 @@ class DeviceImportThread(QThread):
     import_error = pyqtSignal(str)
     device_created = pyqtSignal(str, bool, str)  # device_name, success, message
 
-    def __init__(self, netbox_api, import_data: List[Dict]):
+    def __init__(self, netbox_api, import_data: List[Dict], netbox_data: Dict = None):
         super().__init__()
         self.netbox_api = netbox_api
         self.import_data = import_data
+        self.netbox_data = netbox_data or {}
+        self.detailed_results = []
 
     def run(self):
         successful = 0
@@ -222,7 +224,23 @@ class DeviceImportThread(QThread):
             device_name = device_data.get('name', 'Unknown')
             self.import_progress.emit(device_name, i + 1, total)
 
+            # Initialize result record
+            result = {
+                'name': device_name,
+                'success': False,
+                'netbox_id': '',
+                'message': '',
+                'ip_address': device_data.get('ip_address', ''),
+                'platform_name': '',
+                'site_name': '',
+                'role_name': '',
+                'device_type_name': ''
+            }
+
             try:
+                # Get names for reporting by looking up IDs
+                result.update(self._get_netbox_names(device_data))
+
                 # Build device creation payload
                 device_payload = {
                     'name': device_data['name'],
@@ -237,16 +255,71 @@ class DeviceImportThread(QThread):
                     device_payload['platform'] = device_data['platform_id']
 
                 # Create device in NetBox
-                result = self.netbox_api.create_device(device_payload)
+                created_device = self.netbox_api.create_device(device_payload)
 
                 successful += 1
-                self.device_created.emit(device_name, True, f"Created successfully (ID: {result.id})")
+                result['success'] = True
+                result['netbox_id'] = str(created_device.id)
+                result['message'] = f"Created successfully (ID: {created_device.id})"
+
+                self.device_created.emit(device_name, True, result['message'])
 
             except Exception as e:
                 failed += 1
-                self.device_created.emit(device_name, False, f"Failed: {str(e)}")
+                result['success'] = False
+                result['message'] = f"Failed: {str(e)}"
+
+                self.device_created.emit(device_name, False, result['message'])
+
+            # Add to detailed results
+            self.detailed_results.append(result)
 
             # Small delay to prevent overwhelming the API
             self.msleep(100)
 
-        self.import_complete.emit(successful, failed)
+        self.import_complete.emit(successful, failed, self.detailed_results)
+
+    def _get_netbox_names(self, device_data: Dict) -> Dict:
+        """Get human-readable names for NetBox IDs"""
+        names = {
+            'platform_name': '',
+            'site_name': '',
+            'role_name': '',
+            'device_type_name': ''
+        }
+
+        try:
+            # Platform name
+            if device_data.get('platform_id') and 'platforms' in self.netbox_data:
+                for platform in self.netbox_data['platforms']:
+                    if hasattr(platform, 'id') and platform.id == device_data['platform_id']:
+                        names['platform_name'] = platform.name
+                        break
+
+            # Site name
+            if device_data.get('site_id') and 'sites' in self.netbox_data:
+                for site in self.netbox_data['sites']:
+                    if hasattr(site, 'id') and site.id == device_data['site_id']:
+                        names['site_name'] = site.name
+                        break
+
+            # Role name
+            if device_data.get('role_id') and 'roles' in self.netbox_data:
+                for role in self.netbox_data['roles']:
+                    if hasattr(role, 'id') and role.id == device_data['role_id']:
+                        names['role_name'] = role.name
+                        break
+
+            # Device type name
+            if device_data.get('type_id') and 'device_types' in self.netbox_data:
+                for device_type in self.netbox_data['device_types']:
+                    if hasattr(device_type, 'id') and device_type.id == device_data['type_id']:
+                        manufacturer_name = getattr(device_type.manufacturer, 'name',
+                                                    'Unknown') if device_type.manufacturer else 'Unknown'
+                        names['device_type_name'] = f"{manufacturer_name} - {device_type.model}"
+                        break
+
+        except Exception as e:
+            print(f"Error getting NetBox names: {e}")
+
+        return names

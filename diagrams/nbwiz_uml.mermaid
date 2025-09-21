@@ -1,4 +1,5 @@
 classDiagram
+    %% Main Application Class
     class NetBoxImportWizard {
         -netbox_api: NetBoxAPI
         -discovery_model: DeviceDiscoveryModel
@@ -6,34 +7,73 @@ classDiagram
         -config: ConfigManager
         -tab_widget: QTabWidget
         -device_table: DeviceTableWidget
+        -connection_thread: NetBoxConnectionThread
+        -topology_thread: TopologyLoadThread
+        -netbox_data_thread: NetBoxDataThread
+        -import_thread: DeviceImportThread
+        -devices_to_import: List[Dict]
         +setup_ui()
         +setup_connection_tab()
         +setup_discovery_tab()
         +setup_import_tab()
         +initialize_config()
+        +populate_connection_dropdown()
+        +on_connection_selected()
+        +clear_connection_fields()
+        +save_current_connection()
         +test_netbox_connection()
+        +on_connection_result()
+        +browse_topology_file()
         +load_topology_file()
-        +start_import()
+        +on_topology_progress()
+        +on_topology_loaded()
+        +on_topology_error()
+        +start_netbox_data_fetch()
+        +on_netbox_data_progress()
+        +on_netbox_data_ready()
+        +on_netbox_data_error()
+        +on_table_population_progress()
+        +on_table_population_complete()
+        +populate_bulk_controls()
+        +select_by_discovered_platform()
+        +deselect_by_discovered_platform()
+        +apply_defaults_to_selected()
+        +auto_map_all_platforms()
+        +update_selection_count()
+        +refresh_netbox_data()
+        +refresh_device_matches()
         +validate_import()
+        +start_import()
+        +on_import_progress()
+        +on_device_created()
+        +on_import_complete()
+        +cancel_import()
+        +closeEvent()
     }
 
+    %% Custom Table Widget
     class DeviceTableWidget {
         -population_timer: QTimer
         -devices_to_populate: List
         -netbox_data_cache: Dict
         -current_chunk_index: int
         -chunk_size: int
+        +population_progress: pyqtSignal
+        +population_complete: pyqtSignal
         +setup_table()
         +populate_devices_with_netbox_data()
+        +_prepare_device_list()
+        +_populate_chunk()
+        +_populate_device_row()
+        +_find_matching_platform()
+        +_should_auto_select()
         +get_selected_devices_for_import()
         +select_all_devices()
+        +select_devices_by_discovered_platform()
         +apply_defaults_to_selected()
-        -_populate_chunk()
-        -_populate_device_row()
-        -_find_matching_platform()
-        -_should_auto_select()
     }
 
+    %% NetBox API Wrapper
     class NetBoxAPI {
         -nb: pynetbox.api
         -_cache: Dict
@@ -47,6 +87,7 @@ classDiagram
         +create_cable()
     }
 
+    %% Device Discovery Model
     class DeviceDiscoveryModel {
         -discovered_devices: Dict
         -device_mappings: Dict
@@ -56,20 +97,21 @@ classDiagram
         +find_potential_matches()
     }
 
+    %% Thread Classes
     class NetBoxConnectionThread {
         -url: str
         -token: str
         -verify_ssl: bool
-        +run()
         +connection_result: pyqtSignal
+        +run()
     }
 
     class TopologyLoadThread {
         -file_path: str
-        +run()
         +load_complete: pyqtSignal
         +load_error: pyqtSignal
         +progress_update: pyqtSignal
+        +run()
         -_validate_topology_data()
         -_safe_get_string()
         -_safe_get_connections()
@@ -77,21 +119,23 @@ classDiagram
 
     class NetBoxDataThread {
         -netbox_api: NetBoxAPI
-        +run()
         +data_ready: pyqtSignal
         +data_error: pyqtSignal
         +progress_update: pyqtSignal
+        +run()
     }
 
     class DeviceImportThread {
         -netbox_api: NetBoxAPI
         -import_data: List[Dict]
-        +run()
         +import_progress: pyqtSignal
         +import_complete: pyqtSignal
+        +import_error: pyqtSignal
         +device_created: pyqtSignal
+        +run()
     }
 
+    %% Configuration Management
     class ConfigManager {
         +credentials: CredentialManager
         +is_initialized()
@@ -102,34 +146,46 @@ classDiagram
         +get_connection_token()
         +get_preferences()
         +update_preferences()
+        +update_connection_last_used()
     }
 
-    %% Inheritance relationships
-    NetBoxImportWizard --|> QMainWindow
-    DeviceTableWidget --|> QTableWidget
-    NetBoxConnectionThread --|> QThread
-    TopologyLoadThread --|> QThread
-    NetBoxDataThread --|> QThread
-    DeviceImportThread --|> QThread
+    class CredentialManager {
+        -_unlocked: bool
+        -_master_key: bytes
+        +is_unlocked()
+        +unlock()
+        +store_encrypted()
+        +retrieve_decrypted()
+    }
 
-    %% Composition relationships
-    NetBoxImportWizard *-- DeviceTableWidget
-    NetBoxImportWizard *-- NetBoxAPI
-    NetBoxImportWizard *-- DeviceDiscoveryModel
-    NetBoxImportWizard *-- ConfigManager
+    class NetBoxConnection {
+        +name: str
+        +url: str
+        +verify_ssl: bool
+        +last_used: datetime
+    }
 
-    %% Usage relationships
-    NetBoxImportWizard ..> NetBoxConnectionThread : creates
-    NetBoxImportWizard ..> TopologyLoadThread : creates
-    NetBoxImportWizard ..> NetBoxDataThread : creates
-    NetBoxImportWizard ..> DeviceImportThread : creates
+    class AppPreferences {
+        +window_width: int
+        +window_height: int
+        +last_file_path: str
+    }
 
-    NetBoxDataThread ..> NetBoxAPI : uses
-    DeviceImportThread ..> NetBoxAPI : uses
+    %% Dialog Classes
+    class MasterPasswordDialog {
+        -password_input: QLineEdit
+        +get_password()
+        +exec()
+    }
 
-    DeviceTableWidget ..> DeviceDiscoveryModel : uses data from
+    class MasterPasswordSetupDialog {
+        -password_input: QLineEdit
+        -confirm_input: QLineEdit
+        +get_password()
+        +exec()
+    }
 
-    %% External dependencies (shown for context)
+    %% Qt Base Classes
     class QMainWindow {
         <<PyQt6>>
     }
@@ -142,8 +198,72 @@ classDiagram
         <<PyQt6>>
     }
 
-    class pynetbox {
-        <<External Library>>
+    class QDialog {
+        <<PyQt6>>
     }
 
+    class QTimer {
+        <<PyQt6>>
+    }
+
+    %% External Libraries
+    class pynetbox {
+        <<External Library>>
+        +api()
+        +dcim
+    }
+
+    class requests {
+        <<External Library>>
+        +Session()
+    }
+
+    class urllib3 {
+        <<External Library>>
+        +disable_warnings()
+    }
+
+    %% Inheritance Relationships
+    NetBoxImportWizard --|> QMainWindow
+    DeviceTableWidget --|> QTableWidget
+    NetBoxConnectionThread --|> QThread
+    TopologyLoadThread --|> QThread
+    NetBoxDataThread --|> QThread
+    DeviceImportThread --|> QThread
+    MasterPasswordDialog --|> QDialog
+    MasterPasswordSetupDialog --|> QDialog
+
+    %% Composition Relationships
+    NetBoxImportWizard *-- DeviceTableWidget
+    NetBoxImportWizard *-- NetBoxAPI
+    NetBoxImportWizard *-- DeviceDiscoveryModel
+    NetBoxImportWizard *-- ConfigManager
+    DeviceTableWidget *-- QTimer
+    ConfigManager *-- CredentialManager
+
+    %% Usage/Dependency Relationships
+    NetBoxImportWizard ..> NetBoxConnectionThread : creates
+    NetBoxImportWizard ..> TopologyLoadThread : creates
+    NetBoxImportWizard ..> NetBoxDataThread : creates
+    NetBoxImportWizard ..> DeviceImportThread : creates
+    NetBoxImportWizard ..> MasterPasswordDialog : creates
+    NetBoxImportWizard ..> MasterPasswordSetupDialog : creates
+
+    NetBoxDataThread ..> NetBoxAPI : uses
+    DeviceImportThread ..> NetBoxAPI : uses
+    DeviceTableWidget ..> DeviceDiscoveryModel : uses data from
     NetBoxAPI ..> pynetbox : uses
+    NetBoxAPI ..> requests : uses
+    ConfigManager ..> NetBoxConnection : manages
+    ConfigManager ..> AppPreferences : manages
+
+    %% External Dependencies
+    NetBoxImportWizard ..> urllib3 : imports
+    NetBoxAPI ..> urllib3 : uses for SSL warnings
+
+    %% Signal Relationships (simplified - showing key connections)
+    NetBoxConnectionThread ..> NetBoxImportWizard : connection_result signal
+    TopologyLoadThread ..> NetBoxImportWizard : load_complete/error/progress signals
+    NetBoxDataThread ..> NetBoxImportWizard : data_ready/error/progress signals
+    DeviceImportThread ..> NetBoxImportWizard : import_progress/complete/device_created signals
+    DeviceTableWidget ..> NetBoxImportWizard : population_progress/complete signals
