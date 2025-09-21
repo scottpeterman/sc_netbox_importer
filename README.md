@@ -2,6 +2,36 @@
 
 A production-ready PyQt6 application for importing network topology data from SecureCartography JSON files into NetBox DCIM systems. Designed for rapid device population with comprehensive validation and administrative reporting.
 
+## Screenshots & Interface Overview
+
+### Connection Setup
+![Connection Tab](screenshots/tab2_loading.png)
+*Connection configuration with saved credentials, SSL options, and topology file loading*
+
+### Device Discovery & Configuration
+![Device Discovery](screenshots/tab2_loaded.png)
+*Device discovery table showing intelligent platform mapping, existing device detection, and bulk configuration tools*
+
+**Key Interface Features:**
+- **Color-coded Status**: Yellow highlighting for existing device matches, green for new devices
+- **Platform Intelligence**: Automatic mapping of discovered platforms (C9407R, WS-C2960CX-8TC-L) to NetBox platforms
+- **Bulk Operations**: Select All/None, platform-based selection, and bulk configuration application
+- **Export Capabilities**: CSV export and summary statistics for discovered devices
+
+### Import Execution & Reporting
+![Import Tab](screenshots/import_tab1.png)
+*Import validation, execution, and comprehensive reporting system*
+
+### Integration Architecture
+![SecureCartography Integration](screenshots/integration.png)
+*Complete integration workflow showing NetBox Import Wizard as foundation for network automation*
+
+**Integration Benefits:**
+- **Direct API Integration**: No CSV exports or manual entry required
+- **Conflict Resolution**: Handles existing devices gracefully with match detection
+- **Platform Recognition**: Automatically maps CDP/LLDP discovered platforms to NetBox device types
+- **Continuous Validation**: Real-time validation of network vs. documentation
+
 ## Overview
 
 The NetBox Import Wizard serves as the critical first step in network inventory management by transforming network discovery data into properly categorized NetBox devices. It focuses specifically on reliable device creation and foundational data population, working seamlessly with deeper discovery tools for complete network documentation.
@@ -71,14 +101,17 @@ This tool handles the "get devices into NetBox quickly and correctly" use case w
 
 ```
 netbox-import-wizard/
-├── nbwiz_main.py          # Main application and UI orchestration (600 lines)
-├── config_manager.py      # Secure credentials and preferences  
-├── threading_classes.py   # Background operations (4 thread classes)
-├── netbox_api.py          # NetBox integration and device discovery
-├── ui_components.py       # Reusable UI widgets and helpers
-├── export_utils.py        # CSV export functionality
-├── import_report.py       # Excel/CSV report generation
-└── requirements.txt       # Python dependencies
+├── netbox_wizard/
+│   ├── nbwiz_main.py          # Main application and UI orchestration (600 lines)
+│   ├── config_manager.py      # Secure credentials and preferences  
+│   ├── threading_classes.py   # Background operations (4 thread classes)
+│   ├── netbox_api.py          # NetBox integration and device discovery
+│   ├── ui_components.py       # Reusable UI widgets and helpers
+│   ├── export_utils.py        # CSV export functionality
+│   └── import_report.py       # Excel/CSV report generation
+├── screenshots/               # Application screenshots
+├── diagrams/                  # UML and architecture diagrams
+└── requirements.txt          # Python dependencies
 ```
 
 ### Dependencies
@@ -129,7 +162,7 @@ netbox-import-wizard
 git clone https://github.com/your-org/netbox-import-wizard.git
 cd netbox-import-wizard
 pip install -r requirements.txt
-python nbwiz_main.py
+python -m netbox_wizard.nbwiz_main
 ```
 
 ### NetBox Requirements
@@ -150,7 +183,7 @@ python nbwiz_main.py
 
 ### First Run Configuration
 
-1. **Launch Application**: Run `python nbwiz_main.py`
+1. **Launch Application**: Run `python -m netbox_wizard.nbwiz_main`
 2. **Master Password**: Set up secure credential storage (optional but recommended)
 3. **NetBox Connection**: Configure URL, API token, and SSL settings
 4. **Test Connection**: Verify API access and permissions
@@ -193,6 +226,20 @@ python nbwiz_main.py
    └── Integration handoff for detailed discovery tools
 ```
 
+### User Interface Highlights
+
+**Discovery Tab Features:**
+- **Intelligent Matching**: Automatically detects existing devices (yellow status) vs new devices (green status)
+- **Platform Mapping**: Maps discovered platforms like "C9407R" to NetBox platforms like "cisco_iosxe"
+- **Bulk Controls**: Select by platform, apply defaults to multiple devices, auto-map platforms
+- **Export Options**: CSV export and statistical summaries available immediately
+
+**Status Indicators:**
+- **Yellow Background**: "Found X match(es)" - Device already exists in NetBox
+- **Green Background**: "New device" - Device will be created during import
+- **Platform Dropdowns**: Pre-populated with intelligent platform suggestions
+- **Progress Bars**: Real-time feedback during all long-running operations
+
 ### Export & Reporting Capabilities
 
 **Discovery Phase Exports:**
@@ -207,14 +254,6 @@ python nbwiz_main.py
   - Detailed device results with color coding
   - Administrative template for post-import configuration
   - Pre-formatted columns for rack assignments, asset tags, serial numbers
-
-**Report Contents Include:**
-- Device names and NetBox IDs
-- IP addresses and platform mappings
-- Site, role, and device type assignments
-- Import status and detailed error messages
-- Administrative checklist for completion
-- Integration guidance for next steps
 
 ### Topology File Format
 
@@ -250,7 +289,7 @@ python nbwiz_main.py
 ## Performance Characteristics
 
 **Tested Scale:**
-- NetBox instances: 2000+ devices, 384+ sites, 367+ device types
+- NetBox instances: 6000+ devices, 384+ sites, 367+ device types
 - Topology files: 100+ discovered devices per file
 - Import performance: 50+ devices per minute
 - Platform detection: 95%+ accuracy across mixed vendor environments
@@ -268,109 +307,6 @@ python nbwiz_main.py
 - Responsive cancellation of long-running imports
 - Proper resource cleanup and memory management
 
-## Administrative Integration Workflow
-
-### Excel Report Usage
-
-After successful import, administrators receive comprehensive Excel reports containing:
-
-**Summary Sheet:**
-- Import statistics and success rates
-- Platform breakdown and mapping results
-- Timestamp and topology file information
-
-**Details Sheet:**
-- Complete device inventory with NetBox IDs
-- Color-coded import status (green=success, red=failure)
-- IP addresses and platform mapping results
-- Site, role, and device type assignments
-
-**Admin Follow-up Sheet:**
-- Template for completing device configuration
-- Pre-formatted columns for:
-  - Rack assignments and positions
-  - Asset tags and serial numbers
-  - Custom field values
-  - Location details and notes
-
-### Integration with Discovery Tools
-
-**Handoff Process:**
-1. **Foundation Created**: Devices exist in NetBox with basic categorization
-2. **Discovery Targeting**: Use NetBox device list to target SSH-based discovery
-3. **Data Enhancement**: Fingerprinting and configuration capture adds detailed information
-4. **Operational Integration**: Complete devices ready for monitoring and automation
-
-**Example Integration Flow:**
-```
-Topology JSON
-├── NetBox Import Wizard → Devices in NetBox + Admin Reports
-└── SSH Discovery Pipeline → Enhanced Device Data
-                          ├── Interface Discovery  
-                          ├── Configuration Backup
-                          └── Operational Data Collection
-```
-
-## Error Handling & Recovery
-
-**Connection Issues:**
-- Automatic retry logic for transient network failures
-- Clear SSL certificate guidance for lab environments
-- Credential validation before import operations
-- Fallback mechanisms for API timeouts
-
-**Data Validation:**
-- Pre-import validation prevents partial failures
-- Detailed error messages with resolution guidance
-- Graceful handling of malformed topology data
-- Conflict detection for existing devices
-
-**Import Recovery:**
-- Transaction-safe import operations
-- Detailed logging for troubleshooting
-- Partial import support with clear status reporting
-- Administrative reports for manual cleanup
-
-## Security Considerations
-
-**Credential Protection:**
-- Master password encryption for stored credentials
-- No credentials stored in plaintext or logs
-- Environment variable support for automated deployments
-- Secure API token handling with automatic cleanup
-
-**Network Security:**
-- Configurable SSL verification settings
-- Support for self-signed certificates in lab environments
-- Secure HTTP session management
-- No sensitive data in debug output
-
-**Data Privacy:**
-- Device information treated as sensitive
-- Secure temporary file handling
-- Clean credential passing to subprocess operations
-- Audit-friendly logging without credential exposure
-
-## Deployment Scenarios
-
-### Enterprise Network Teams
-- Rapid NetBox population during network modernization
-- Standardized device import process across multiple sites
-- Integration with existing discovery and automation workflows
-- Excel reporting for cross-team collaboration
-
-### Lab Environments  
-- Quick setup of test NetBox instances
-- Self-signed certificate support for lab networks
-- Flexible configuration for changing lab topologies
-- Development integration for network automation testing
-
-### Service Providers
-- Multi-tenant NetBox deployments with site segregation
-- Bulk device import for customer network documentation
-- Standardized platform mapping across customer environments
-- Administrative handoff processes for operations teams
-
 ## Contributing & Development
 
 **Project Structure:**
@@ -387,46 +323,6 @@ Topology JSON
 - Use proper Qt threading patterns for UI responsiveness
 - Comprehensive error handling with user-friendly messages
 - Production-ready logging and debugging capabilities
-
-**Testing Recommendations:**
-- Test with production-scale NetBox instances
-- Validate against diverse vendor platform mixes
-- Verify SSL certificate handling in lab environments
-- Performance testing with large topology files
-
-## Future Roadmap
-
-### Post-1.0 Enhancements
-- **Cable Import**: Create NetBox cables from topology connection data
-- **Enhanced Reporting**: Additional Excel templates for specific use cases
-- **API Improvements**: Bulk device creation for improved performance
-- **Platform Intelligence**: Machine learning for platform detection improvement
-
-### Integration Features
-- **Configuration Management**: Integration with network automation tools
-- **Monitoring Integration**: Device handoff to monitoring systems
-- **CMDB Sync**: Bi-directional synchronization with enterprise CMDBs
-- **Audit Trails**: Enhanced logging for compliance and change tracking
-
-## Support & Resources
-
-**Documentation:**
-- Built-in help system with contextual guidance
-- Comprehensive error message explanations
-- Platform mapping reference guide
-- Administrative workflow documentation
-
-**Community:**
-- GitHub repository for issues and feature requests
-- User community for sharing platform mappings
-- Integration examples with popular discovery tools
-- Best practices documentation
-
-**Professional Support:**
-- Enterprise deployment assistance
-- Custom platform mapping development
-- Integration consulting for complex environments
-- Training and onboarding services
 
 ---
 
