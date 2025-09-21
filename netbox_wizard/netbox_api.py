@@ -98,6 +98,60 @@ class DeviceDiscoveryModel:
         """Set discovered devices from thread result"""
         self.discovered_devices = devices
 
+    def find_potential_matches(self, netbox_devices: List[Dict]) -> Dict:
+        """Find potential matches between discovered and existing NetBox devices"""
+        matches = {}
+
+        # Get all device names that will appear in the table (main + peers)
+        all_device_names = set()
+
+        print(f"DEBUG: Starting with {len(self.discovered_devices)} main devices")
+
+        # Add main devices
+        for device_name in self.discovered_devices.keys():
+            all_device_names.add(device_name)
+            print(f"DEBUG: Added main device: {device_name}")
+
+        # Add peer devices
+        for device_name, device_data in self.discovered_devices.items():
+            peers = device_data.get('peers', {})
+            if isinstance(peers, dict):
+                print(f"DEBUG: Checking peers for {device_name}: {list(peers.keys())}")
+                for peer_name in peers.keys():
+                    if peer_name not in self.discovered_devices:  # Avoid duplicates
+                        all_device_names.add(peer_name)
+                        print(f"DEBUG: Added peer device: {peer_name}")
+                    else:
+                        print(f"DEBUG: Skipped peer {peer_name} (already a main device)")
+
+        print(f"DEBUG: All device names to check ({len(all_device_names)}): {sorted(all_device_names)}")
+        print(f"DEBUG: Checking {len(netbox_devices)} NetBox devices for matches")
+
+        for device_name in all_device_names:
+            print(f"DEBUG: Looking for matches for: '{device_name}'")
+
+            potential_matches = []
+            for nb_device in netbox_devices:
+                try:
+                    # Only match by name (case-insensitive)
+                    if hasattr(nb_device, 'name') and nb_device.name:
+                        if nb_device.name.lower() == device_name.lower():
+                            print(f"DEBUG: MATCH FOUND - '{device_name}' matches '{nb_device.name}'")
+                            potential_matches.append(('name', nb_device))
+                except (AttributeError, ValueError) as e:
+                    print(f"DEBUG: Error checking device: {e}")
+                    continue
+
+            if potential_matches:
+                matches[device_name] = potential_matches
+                print(f"DEBUG: Total matches for '{device_name}': {len(potential_matches)}")
+            else:
+                print(f"DEBUG: NO MATCHES found for '{device_name}'")
+
+        print(f"DEBUG: Final matches dict: {list(matches.keys())}")
+        return matches
+
+
     def extract_unique_platforms(self) -> List[str]:
         """Extract unique platform strings from discovered devices"""
         platforms = set()
@@ -120,35 +174,3 @@ class DeviceDiscoveryModel:
                             platforms.add(peer_platform.strip())
 
         return sorted(list(platforms))
-
-    def find_potential_matches(self, netbox_devices: List[Dict]) -> Dict:
-        """Find potential matches between discovered and existing NetBox devices"""
-        matches = {}
-
-        for device_name in self.discovered_devices.keys():
-            device_ip = ''
-            node_details = self.discovered_devices[device_name].get('node_details', {})
-            if isinstance(node_details, dict):
-                device_ip = node_details.get('ip', '').strip()
-
-            potential_matches = []
-            for nb_device in netbox_devices:
-                try:
-                    # Match by name (case-insensitive)
-                    if hasattr(nb_device, 'name') and nb_device.name:
-                        if nb_device.name.lower() == device_name.lower():
-                            potential_matches.append(('name', nb_device))
-
-                    # Match by primary IP
-                    if device_ip and hasattr(nb_device, 'primary_ip4') and nb_device.primary_ip4:
-                        nb_ip = str(nb_device.primary_ip4).split('/')[0]
-                        if nb_ip == device_ip:
-                            potential_matches.append(('ip', nb_device))
-                except (AttributeError, ValueError) as e:
-                    # Skip devices that don't have expected attributes
-                    continue
-
-            if potential_matches:
-                matches[device_name] = potential_matches
-
-        return matches
